@@ -109,15 +109,15 @@ button:disabled {
 .hero {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(430px, 1.1fr);
-  gap: 24px;
-  padding: 22px 0;
+  gap: 20px;
+  padding: 18px 0;
   border-bottom: 1px solid rgba(16, 21, 20, 0.18);
 }
 
 .hero h2 {
   max-width: 620px;
   margin: 12px 0;
-  font-size: clamp(34px, 5vw, 58px);
+  font-size: clamp(32px, 4vw, 48px);
   line-height: 1;
   font-weight: 850;
 }
@@ -129,7 +129,7 @@ button:disabled {
 .empty-list {
   color: #4c5550;
   line-height: 1.65;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .pills {
@@ -150,13 +150,13 @@ button:disabled {
 }
 
 .canvas {
-  min-height: 300px;
+  min-height: 250px;
   border: 1px solid rgba(16, 21, 20, 0.18);
   background:
     linear-gradient(rgba(16, 21, 20, 0.06) 1px, transparent 1px),
     linear-gradient(90deg, rgba(16, 21, 20, 0.06) 1px, transparent 1px), rgba(255, 253, 246, 0.72);
   background-size: 22px 22px;
-  padding: 22px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -167,7 +167,7 @@ button:disabled {
   border: 1px solid rgba(16, 21, 20, 0.16);
   background: rgba(255, 253, 246, 0.9);
   border-radius: 6px;
-  padding: 14px;
+  padding: 12px;
 }
 
 .canvas-note span {
@@ -180,7 +180,7 @@ button:disabled {
 .canvas-note strong {
   display: block;
   margin-top: 5px;
-  font-size: 19px;
+  font-size: 17px;
 }
 
 .metric-grid {
@@ -223,15 +223,15 @@ button:disabled {
 }
 
 .flow-node {
-  min-height: 92px;
+  min-height: 74px;
   border: 1px solid rgba(16, 21, 20, 0.15);
   border-radius: 6px;
-  padding: 14px;
+  padding: 12px;
   background: #fffdf6;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .flow-node.dark {
@@ -286,7 +286,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1.1fr;
   gap: 24px;
-  margin: 26px 0;
+  margin: 18px 0;
 }
 
 .value-card {

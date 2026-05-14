@@ -416,57 +416,6 @@ export function App() {
         <MetricCard label="Proof bundles" value={proofCount.toString()} />
       </section>
 
-      <section className="network-card">
-        <div>
-          <span className="eyebrow">CURRENT BUILD TARGET</span>
-          <h3>PayOps first, bridge and Gateway second</h3>
-          <p>
-            The v1 product surface validates Arc-specific payment operations: USDC-denominated gas,
-            before/after balances, receipt proof, and event reconciliation. CCTP, Gateway, App Kit Send,
-            StableFX, and Memo are tracked as gated expansion modules rather than implied features.
-          </p>
-        </div>
-        <dl>
-          <div>
-            <dt>Chain ID</dt>
-            <dd>5042002</dd>
-          </div>
-          <div>
-            <dt>RPC</dt>
-            <dd>{arcRpcUrl}</dd>
-          </div>
-          <div>
-            <dt>Memo contract</dt>
-            <dd>{memoContractAddress}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section className="value-card">
-        <div>
-          <span className="eyebrow">ENGINEERING DEPLOYMENT PLAN</span>
-          <h3>What gets validated</h3>
-        </div>
-        <div className="value-grid">
-          <article>
-            <strong>PayOps base layer</strong>
-            <p>Wallet, balances, USDC gas price, settlement item, receipt, and Transfer proof.</p>
-          </article>
-          <article>
-            <strong>Gas accounting</strong>
-            <p>Estimate fee before submit, then capture actual gas used and fee paid in USDC.</p>
-          </article>
-          <article>
-            <strong>Treasury delta</strong>
-            <p>Record native USDC and token balances before and after settlement.</p>
-          </article>
-          <article>
-            <strong>Expansion gates</strong>
-            <p>App Kit Send, CCTP, Gateway, StableFX, and Memo are tested only when credentials or live proof exist.</p>
-          </article>
-        </div>
-      </section>
-
       <section className="wallet-card">
         <div>
           <h3>Wallet and network</h3>
@@ -618,6 +567,57 @@ export function App() {
             )}
           </div>
         </section>
+      </section>
+
+      <section className="network-card">
+        <div>
+          <span className="eyebrow">CURRENT BUILD TARGET</span>
+          <h3>PayOps first, bridge and Gateway second</h3>
+          <p>
+            The v1 product surface validates Arc-specific payment operations: USDC-denominated gas,
+            before/after balances, receipt proof, and event reconciliation. CCTP, Gateway, App Kit Send,
+            StableFX, and Memo are tracked as gated expansion modules rather than implied features.
+          </p>
+        </div>
+        <dl>
+          <div>
+            <dt>Chain ID</dt>
+            <dd>5042002</dd>
+          </div>
+          <div>
+            <dt>RPC</dt>
+            <dd>{arcRpcUrl}</dd>
+          </div>
+          <div>
+            <dt>Memo contract</dt>
+            <dd>{memoContractAddress}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="value-card">
+        <div>
+          <span className="eyebrow">ENGINEERING DEPLOYMENT PLAN</span>
+          <h3>What gets validated</h3>
+        </div>
+        <div className="value-grid">
+          <article>
+            <strong>PayOps base layer</strong>
+            <p>Wallet, balances, USDC gas price, settlement item, receipt, and Transfer proof.</p>
+          </article>
+          <article>
+            <strong>Gas accounting</strong>
+            <p>Estimate fee before submit, then capture actual gas used and fee paid in USDC.</p>
+          </article>
+          <article>
+            <strong>Treasury delta</strong>
+            <p>Record native USDC and token balances before and after settlement.</p>
+          </article>
+          <article>
+            <strong>Expansion gates</strong>
+            <p>App Kit Send, CCTP, Gateway, StableFX, and Memo are tested only when credentials or live proof exist.</p>
+          </article>
+        </div>
       </section>
     </main>
   )

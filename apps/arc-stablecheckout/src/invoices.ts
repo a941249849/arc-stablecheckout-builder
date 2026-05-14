@@ -15,6 +15,15 @@ export type PaymentProof = {
   tokenAddress: Address
   amount: string
   rawAmount: string
+  estimatedGas?: string
+  estimatedFeeUsdc?: string
+  gasUsed?: string
+  effectiveGasPrice?: string
+  feePaidUsdc?: string
+  nativeBalanceBefore?: string
+  nativeBalanceAfter?: string
+  tokenBalanceBefore?: string
+  tokenBalanceAfter?: string
   transferLogIndex?: number
   memoStatus: 'not-used' | 'pending-evaluation' | 'unsupported'
   reconciledAt: string
@@ -32,7 +41,7 @@ export type Invoice = {
   proof?: PaymentProof
 }
 
-const storageKey = 'arc-stablecheckout-invoices-v1'
+const storageKey = 'arc-payops-invoices-v2'
 
 export function createInvoice(input: {
   recipient: Address
@@ -76,4 +85,3 @@ export function normalizeAmount(value: string): string {
   if (!clean) return '0'
   return clean
 }
-

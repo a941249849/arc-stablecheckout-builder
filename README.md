@@ -1,8 +1,12 @@
-# Arc StableCheckout Builder
+# Arc PayOps Console
 
-Arc StableCheckout Builder is a public testnet workspace for validating whether Arc can support a practical stablecoin checkout loop with verifiable payment evidence.
+Arc PayOps Console is a public testnet workspace for validating Arc as a USDC-native treasury operations and settlement layer.
 
-The repository is independent from the Tempo demo. It uses Arc as the primary build target and keeps the Tempo comparison in separate research notes so the engineering surface stays clean.
+The project no longer treats Arc as a clone of a Tempo checkout flow. The current direction is to measure the operational properties that are specific to Arc:
+
+```txt
+wallet / treasury -> Arc USDC gas -> settlement -> receipt + Transfer log -> gas and balance proof
+```
 
 ## Live Demo
 
@@ -12,40 +16,51 @@ GitHub Pages deployment:
 https://a941249849.github.io/arc-stablecheckout-builder/
 ```
 
-The repository also keeps a `vercel.json` configuration, so the same app can be deployed to Vercel after the Vercel account token is refreshed.
+The repository also keeps `vercel.json`, so the same app can be deployed to Vercel after the Vercel account token is refreshed.
 
-The demo flow is:
-
-```txt
-invoice -> USDC / EURC payment -> Arc RPC receipt -> ERC-20 Transfer log match -> copyable proof bundle
-```
-
-This is intentionally more than a generic transfer page. The app only marks an invoice as paid after it can match the transaction receipt against the expected payer, recipient, token, and amount.
-
-## Current Status
+## Current Product Scope
 
 Implemented:
 
 - Arc Testnet wallet connection through injected EVM wallets.
 - Arc Testnet network switch configuration.
-- USDC and EURC balance reads.
-- Local invoice creation with recipient, amount, token, and reference.
-- ERC-20 transfer submission for Arc Testnet stablecoins.
+- Native USDC gas balance read with 18-decimal accounting.
+- USDC and EURC ERC-20 balance reads with 6-decimal accounting.
+- Live gas price and latest block reads from Arc RPC.
+- Settlement item creation with recipient, amount, token, and reference.
+- ERC-20 transfer submission for Arc Testnet USDC/EURC.
+- Pre-submit gas estimate and estimated USDC fee capture.
 - RPC receipt wait and verification.
+- Actual gas used, effective gas price, and fee paid in USDC.
+- Before/after native USDC and token balance deltas.
 - ERC-20 `Transfer` log reconciliation.
-- Copyable proof bundle with tx hash, block data, sender, recipient, token contract, and reconciliation status.
-- Manual transaction-hash verification against the selected invoice.
-- Explicit Memo contract status as pending validation, not a completed claim.
+- Copyable PayOps proof bundle.
+- Manual transaction-hash verification against a selected settlement item.
 
-Known boundary:
+Gated expansion modules:
 
-- v1 uses standard ERC-20 transfer reconciliation. The predeployed Arc Memo contract remains a validation item until a live memo-attached payment path is proven.
+- App Kit Send comparison.
+- CCTP / Bridge Kit consolidation into Arc.
+- Gateway unified balance.
+- StableFX settlement.
+- Memo contract invoice metadata.
+
+These are not presented as completed features until live proof exists.
+
+## Why This Angle
+
+Arc's strongest current builder angle is not a generic transfer page. It is a stablecoin operations layer:
+
+- USDC is the native gas asset.
+- Fees are dollar-denominated and operationally measurable.
+- USDC has both native gas representation and ERC-20 transfer interface.
+- Arc is designed to work with Circle App Kit, CCTP, Gateway, EURC, and StableFX.
+- The useful developer question is whether Arc can reduce treasury fragmentation and improve settlement observability.
 
 ## App
 
 ```sh
 npm install
-npm --workspace apps/arc-stablecheckout run dev
 npm --workspace apps/arc-stablecheckout run build
 ```
 
@@ -72,6 +87,7 @@ apps/arc-stablecheckout
 
 - [Arc current state review](docs/arc-current-state.md)
 - [Arc build gate](docs/arc-build-gate.md)
+- [Arc PayOps deployment plan](docs/arc-payops-deployment-plan.md)
 - [Tempo vs Arc comparison outline](docs/tempo-vs-arc-comparison-outline.md)
 
 ## Boundaries

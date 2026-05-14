@@ -44,6 +44,7 @@ type BalanceState = Record<string, string>
 type Notice = { tone: 'info' | 'success' | 'error'; text: string }
 
 const emptyBalances = Object.fromEntries(stableTokens.map((token) => [token.symbol, '-']))
+const unavailable = '-'
 
 export function App() {
   const { address, chainId, connector, isConnected } = useAccount()
@@ -59,12 +60,15 @@ export function App() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string>()
   const [balances, setBalances] = useState<BalanceState>(emptyBalances)
+  const [nativeBalance, setNativeBalance] = useState(unavailable)
+  const [gasPrice, setGasPrice] = useState(unavailable)
+  const [latestBlock, setLatestBlock] = useState(unavailable)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [manualHash, setManualHash] = useState('')
   const [notice, setNotice] = useState<Notice>({
     tone: 'info',
-    text: 'Connect a wallet, create an invoice, then send USDC on Arc Testnet.',
+    text: 'Connect a wallet to measure Arc balances, USDC gas, and payment proof.',
   })
 
   useEffect(() => {
@@ -79,32 +83,41 @@ export function App() {
   const selectedInvoice = invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0]
   const isArcNetwork = chainId === arcChainId
 
-  async function refreshBalances() {
-    if (!publicClient || !address) return
+  async function refreshPayOpsState() {
+    if (!publicClient) return
     setIsRefreshing(true)
     try {
-      const next: BalanceState = { ...emptyBalances }
-      await Promise.all(
-        stableTokens.map(async (token) => {
-          const balance = await publicClient.readContract({
-            address: token.address,
-            abi: erc20Abi,
-            functionName: 'balanceOf',
-            args: [address],
-          })
-          next[token.symbol] = formatUnits(balance, token.decimals)
-        }),
-      )
-      setBalances(next)
+      const [nextGasPrice, nextBlock] = await Promise.all([publicClient.getGasPrice(), publicClient.getBlockNumber()])
+      setGasPrice(formatUnits(nextGasPrice, 18))
+      setLatestBlock(nextBlock.toString())
+
+      if (!address) return
+
+      const [native, tokenEntries] = await Promise.all([
+        publicClient.getBalance({ address }),
+        Promise.all(
+          stableTokens.map(async (token) => {
+            const balance = await publicClient.readContract({
+              address: token.address,
+              abi: erc20Abi,
+              functionName: 'balanceOf',
+              args: [address],
+            })
+            return [token.symbol, formatUnits(balance, token.decimals)] as const
+          }),
+        ),
+      ])
+      setNativeBalance(formatUnits(native, 18))
+      setBalances(Object.fromEntries(tokenEntries))
     } catch {
-      setNotice({ tone: 'error', text: 'Could not refresh Arc balances from RPC.' })
+      setNotice({ tone: 'error', text: 'Could not refresh Arc PayOps state from RPC.' })
     } finally {
       setIsRefreshing(false)
     }
   }
 
   useEffect(() => {
-    void refreshBalances()
+    void refreshPayOpsState()
   }, [address, publicClient])
 
   async function connectWallet() {
@@ -137,7 +150,7 @@ export function App() {
 
   function addInvoice() {
     if (!isAddress(recipient)) {
-      setNotice({ tone: 'error', text: 'Enter a valid recipient address before creating an invoice.' })
+      setNotice({ tone: 'error', text: 'Enter a valid settlement recipient address.' })
       return
     }
     const normalizedAmount = normalizeAmount(amount)
@@ -152,7 +165,7 @@ export function App() {
     })
     setInvoices((current) => [invoice, ...current])
     setSelectedInvoiceId(invoice.id)
-    setNotice({ tone: 'success', text: `Invoice ${invoice.id} created.` })
+    setNotice({ tone: 'success', text: `Settlement item ${invoice.id} created.` })
   }
 
   async function sendInvoice(invoice: Invoice) {
@@ -169,9 +182,22 @@ export function App() {
     const rawAmount = parseUnits(invoice.amount, token.decimals)
     setIsSending(true)
     setSelectedInvoiceId(invoice.id)
-    setNotice({ tone: 'info', text: `Submitting ${invoice.amount} ${invoice.token} payment for ${invoice.id}.` })
+    setNotice({ tone: 'info', text: `Submitting ${invoice.amount} ${invoice.token} settlement for ${invoice.id}.` })
 
     try {
+      const [estimatedGas, estimatedGasPrice, nativeBefore, tokenBefore] = await Promise.all([
+        publicClient.estimateContractGas({
+          account: address,
+          address: token.address,
+          abi: erc20Abi,
+          functionName: 'transfer',
+          args: [invoice.recipient, rawAmount],
+        }),
+        publicClient.getGasPrice(),
+        publicClient.getBalance({ address }),
+        readTokenBalance(address, token.symbol),
+      ])
+
       const txHash = await walletClient.writeContract({
         address: token.address,
         abi: erc20Abi,
@@ -186,7 +212,18 @@ export function App() {
       )
 
       const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
-      const proof = createProofFromReceipt(receipt, invoice, address, rawAmount.toString())
+      const [nativeAfter, tokenAfter] = await Promise.all([
+        publicClient.getBalance({ address }),
+        readTokenBalance(address, token.symbol),
+      ])
+      const proof = createProofFromReceipt(receipt, invoice, address, rawAmount.toString(), {
+        estimatedGas,
+        estimatedGasPrice,
+        nativeBefore,
+        nativeAfter,
+        tokenBefore,
+        tokenAfter,
+      })
 
       setInvoices((current) =>
         current.map((item) =>
@@ -200,13 +237,13 @@ export function App() {
             : item,
         ),
       )
-      await refreshBalances()
+      await refreshPayOpsState()
       setNotice({
         tone: proof.transferLogIndex === undefined ? 'error' : 'success',
         text:
           proof.transferLogIndex === undefined
-            ? 'RPC receipt confirmed, but matching Transfer log was not found.'
-            : `Payment proof confirmed for ${invoice.id}.`,
+            ? 'Receipt confirmed, but the expected Transfer log was not found.'
+            : `Settlement proof confirmed for ${invoice.id}. Gas and balance deltas captured.`,
       })
     } catch (error) {
       setNotice({ tone: 'error', text: `Send failed: ${stringifyError(error)}` })
@@ -245,11 +282,30 @@ export function App() {
     }
   }
 
+  async function readTokenBalance(owner: Address, symbol: 'USDC' | 'EURC'): Promise<bigint> {
+    if (!publicClient) return 0n
+    const token = findToken(symbol)
+    return publicClient.readContract({
+      address: token.address,
+      abi: erc20Abi,
+      functionName: 'balanceOf',
+      args: [owner],
+    })
+  }
+
   function createProofFromReceipt(
     receipt: TransactionReceipt,
     invoice: Invoice,
     payer: Address,
     rawAmount: string,
+    telemetry?: {
+      estimatedGas: bigint
+      estimatedGasPrice: bigint
+      nativeBefore: bigint
+      nativeAfter: bigint
+      tokenBefore: bigint
+      tokenAfter: bigint
+    },
   ): PaymentProof {
     const token = findToken(invoice.token)
     let transferLogIndex: number | undefined
@@ -276,6 +332,9 @@ export function App() {
       }
     }
 
+    const feePaid = receipt.effectiveGasPrice ? receipt.gasUsed * receipt.effectiveGasPrice : undefined
+    const estimatedFee = telemetry ? telemetry.estimatedGas * telemetry.estimatedGasPrice : undefined
+
     return {
       txHash: receipt.transactionHash,
       rpcStatus: receipt.status,
@@ -288,6 +347,15 @@ export function App() {
       tokenAddress: token.address,
       amount: invoice.amount,
       rawAmount,
+      estimatedGas: telemetry?.estimatedGas.toString(),
+      estimatedFeeUsdc: estimatedFee ? formatUnits(estimatedFee, 18) : undefined,
+      gasUsed: receipt.gasUsed.toString(),
+      effectiveGasPrice: receipt.effectiveGasPrice ? formatUnits(receipt.effectiveGasPrice, 18) : undefined,
+      feePaidUsdc: feePaid ? formatUnits(feePaid, 18) : undefined,
+      nativeBalanceBefore: telemetry ? formatUnits(telemetry.nativeBefore, 18) : undefined,
+      nativeBalanceAfter: telemetry ? formatUnits(telemetry.nativeAfter, 18) : undefined,
+      tokenBalanceBefore: telemetry ? formatUnits(telemetry.tokenBefore, token.decimals) : undefined,
+      tokenBalanceAfter: telemetry ? formatUnits(telemetry.tokenAfter, token.decimals) : undefined,
       transferLogIndex,
       memoStatus: 'pending-evaluation',
       reconciledAt: new Date().toISOString(),
@@ -299,12 +367,14 @@ export function App() {
     if (selectedInvoiceId === id) setSelectedInvoiceId(undefined)
   }
 
+  const proofCount = invoices.filter((invoice) => invoice.proof).length
+
   return (
     <main className="shell">
       <header className="topbar">
         <div>
           <span className="eyebrow">ARC TESTNET</span>
-          <h1>Arc StableCheckout</h1>
+          <h1>Arc PayOps Console</h1>
         </div>
         <nav>
           <a href="https://docs.arc.network/" target="_blank" rel="noreferrer">
@@ -321,31 +391,38 @@ export function App() {
 
       <section className="hero">
         <div>
-          <span className="eyebrow">STABLECOIN CHECKOUT BUILDER</span>
-          <h2>Verify USDC invoice settlement on Arc</h2>
+          <span className="eyebrow">STABLECOIN TREASURY OPERATIONS</span>
+          <h2>Measure settlement, gas, and proof on Arc</h2>
           <p>
-            A public testnet demo for checking whether Arc can support a practical checkout loop:
-            invoice creation, USDC payment, RPC receipt proof, transfer-log reconciliation, and explorer
-            evidence.
+            This build treats Arc as a USDC-native operations layer: balances, gas accounting, settlement
+            evidence, and reconciliation status are captured together instead of presenting another generic
+            transfer screen.
           </p>
           <div className="pills">
-            <span>USDC gas</span>
-            <span>Arc Testnet</span>
-            <span>ERC-20 Transfer proof</span>
-            <span>Memo contract evaluation</span>
+            <span>USDC native gas</span>
+            <span>Balance delta</span>
+            <span>Transfer log proof</span>
+            <span>CCTP / Gateway gate</span>
           </div>
         </div>
-        <PaymentCanvas />
+        <PayOpsCanvas />
+      </section>
+
+      <section className="metric-grid">
+        <MetricCard label="Native gas balance" value={nativeBalance} suffix="USDC" />
+        <MetricCard label="Current gas price" value={gasPrice} suffix="USDC / gas" />
+        <MetricCard label="Latest Arc block" value={latestBlock} />
+        <MetricCard label="Proof bundles" value={proofCount.toString()} />
       </section>
 
       <section className="network-card">
         <div>
           <span className="eyebrow">CURRENT BUILD TARGET</span>
-          <h3>USDC checkout first, memo reconciliation second</h3>
+          <h3>PayOps first, bridge and Gateway second</h3>
           <p>
-            Arc’s direct path is USDC settlement with predictable USDC gas. The predeployed Memo contract is
-            tracked as a validation item, not presented as a completed feature until a live memo payment is
-            proven.
+            The v1 product surface validates Arc-specific payment operations: USDC-denominated gas,
+            before/after balances, receipt proof, and event reconciliation. CCTP, Gateway, App Kit Send,
+            StableFX, and Memo are tracked as gated expansion modules rather than implied features.
           </p>
         </div>
         <dl>
@@ -366,35 +443,35 @@ export function App() {
 
       <section className="value-card">
         <div>
-          <span className="eyebrow">NOT JUST A TRANSFER SCREEN</span>
-          <h3>What the demo proves</h3>
+          <span className="eyebrow">ENGINEERING DEPLOYMENT PLAN</span>
+          <h3>What gets validated</h3>
         </div>
         <div className="value-grid">
           <article>
-            <strong>Invoice state</strong>
-            <p>Each payment starts from a local invoice with recipient, amount, token, and reference.</p>
+            <strong>PayOps base layer</strong>
+            <p>Wallet, balances, USDC gas price, settlement item, receipt, and Transfer proof.</p>
           </article>
           <article>
-            <strong>Receipt evidence</strong>
-            <p>The app waits for the Arc RPC receipt before changing payment status.</p>
+            <strong>Gas accounting</strong>
+            <p>Estimate fee before submit, then capture actual gas used and fee paid in USDC.</p>
           </article>
           <article>
-            <strong>Transfer matching</strong>
-            <p>Paid status requires the ERC-20 Transfer log to match payer, recipient, token, and amount.</p>
+            <strong>Treasury delta</strong>
+            <p>Record native USDC and token balances before and after settlement.</p>
           </article>
           <article>
-            <strong>Copyable proof</strong>
-            <p>The proof bundle can be copied into a report with block data, tx hash, and reconciliation status.</p>
+            <strong>Expansion gates</strong>
+            <p>App Kit Send, CCTP, Gateway, StableFX, and Memo are tested only when credentials or live proof exist.</p>
           </article>
         </div>
       </section>
 
       <section className="wallet-card">
         <div>
-          <h3>Wallet</h3>
+          <h3>Wallet and network</h3>
           <p>
-            Standard EVM wallets can connect to Arc Testnet. Some wallets may display the gas asset as ETH,
-            while the underlying gas accounting is USDC.
+            Arc uses USDC as the native gas asset. The console separates native gas accounting from the
+            6-decimal ERC-20 interface used for application transfers.
           </p>
         </div>
         <div className="wallet-actions">
@@ -414,7 +491,7 @@ export function App() {
             {isArcNetwork ? 'Arc Testnet' : 'Switch network'}
           </button>
           <a className="button-link" href={arcFaucetUrl} target="_blank" rel="noreferrer">
-            Get test USDC
+            Get test stablecoins
           </a>
         </div>
         <div className={`notice ${notice.tone}`}>{notice.text}</div>
@@ -427,11 +504,11 @@ export function App() {
       <section className="grid">
         <section className="panel">
           <div className="panel-title">
-            <h3>Create invoice</h3>
+            <h3>Create settlement item</h3>
             <strong>{tokenSymbol}</strong>
           </div>
           <label>
-            Payment token
+            Settlement token
             <select value={tokenSymbol} onChange={(event) => setTokenSymbol(event.target.value as 'USDC' | 'EURC')}>
               {stableTokens.map((token) => (
                 <option key={token.symbol} value={token.symbol}>
@@ -454,7 +531,7 @@ export function App() {
             <input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" />
           </label>
           <button type="button" className="primary" onClick={addInvoice}>
-            Create invoice
+            Create item
           </button>
 
           <div className="balance-card">
@@ -476,14 +553,14 @@ export function App() {
               </button>
             ))}
           </div>
-          <button type="button" onClick={refreshBalances} disabled={!address || isRefreshing}>
-            {isRefreshing ? 'Refreshing...' : 'Refresh balances'}
+          <button type="button" onClick={refreshPayOpsState} disabled={isRefreshing}>
+            {isRefreshing ? 'Refreshing...' : 'Refresh PayOps state'}
           </button>
         </section>
 
         <section className="panel wide">
           <div className="panel-title">
-            <h3>Payment proof</h3>
+            <h3>Settlement proof</h3>
             <strong>{invoices.length}</strong>
           </div>
           <div className="verify-row">
@@ -500,14 +577,14 @@ export function App() {
             <ProofCard proof={selectedInvoice.proof} invoice={selectedInvoice} />
           ) : (
             <div className="empty-proof">
-              Select an invoice and send payment. The proof console will show RPC status, block data, transfer
-              log matching, Arcscan link, and Memo contract status.
+              Send a settlement item or verify a transaction hash. The console will show RPC status, gas paid,
+              balance deltas, transfer-log matching, Arcscan link, and Memo status.
             </div>
           )}
 
           <div className="invoice-list">
             {invoices.length === 0 ? (
-              <div className="empty-list">No invoices yet.</div>
+              <div className="empty-list">No settlement items yet.</div>
             ) : (
               invoices.map((invoice) => (
                 <article
@@ -525,14 +602,14 @@ export function App() {
                       </strong>
                       <small className={invoice.status}>{invoice.status}</small>
                     </span>
-                    <span>{invoice.reference}</span>
+                    <span>{invoice.proof?.feePaidUsdc ? `${invoice.proof.feePaidUsdc} gas USDC` : invoice.reference}</span>
                   </button>
                   <div className="invoice-actions">
                     <button type="button" onClick={() => removeInvoice(invoice.id)}>
                       Delete
                     </button>
                     <button type="button" className="primary" onClick={() => sendInvoice(invoice)} disabled={isSending}>
-                      {isSending && selectedInvoiceId === invoice.id ? 'Sending...' : 'Send'}
+                      {isSending && selectedInvoiceId === invoice.id ? 'Sending...' : 'Settle'}
                     </button>
                   </div>
                 </article>
@@ -545,28 +622,38 @@ export function App() {
   )
 }
 
-function PaymentCanvas() {
+function PayOpsCanvas() {
   return (
-    <div className="canvas" aria-label="Arc checkout flow">
+    <div className="canvas" aria-label="Arc PayOps flow">
       <div className="canvas-note">
-        <span>ARC CHECKOUT FLOW</span>
-        <strong>USDC settlement with verifiable proof</strong>
+        <span>ARC PAYOPS FLOW</span>
+        <strong>USDC treasury layer with auditable settlement</strong>
       </div>
       <div className="flow-row">
-        <FlowNode title="Invoice" detail="ARC-TESTNET" />
+        <FlowNode title="Inbound USDC" detail="CCTP / faucet gate" />
         <FlowArrow />
-        <FlowNode title="Wallet" detail="USDC gas" />
+        <FlowNode title="Arc treasury" detail="USDC gas + balances" />
         <FlowArrow />
-        <FlowNode title="Arc" detail="Sub-second finality" dark />
+        <FlowNode title="Settlement" detail="Receipt + event proof" dark />
         <FlowArrow />
-        <FlowNode title="Merchant" detail="Paid" />
+        <FlowNode title="Ops record" detail="Copyable evidence" />
       </div>
       <div className="proof-line">
-        <span>ERC-20 Transfer</span>
-        <span>RPC receipt</span>
-        <span>Arcscan</span>
+        <span>Fee in USDC</span>
+        <span>Balance delta</span>
+        <span>Reconciliation</span>
       </div>
     </div>
+  )
+}
+
+function MetricCard({ label, value, suffix }: { label: string; value: string; suffix?: string }) {
+  return (
+    <article className="metric-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {suffix ? <small>{suffix}</small> : null}
+    </article>
   )
 }
 
@@ -586,7 +673,7 @@ function FlowArrow() {
 function ProofCard({ proof, invoice }: { proof: PaymentProof; invoice: Invoice }) {
   const explorerUrl = `${arcExplorerUrl}/tx/${proof.txHash}`
   const proofText = [
-    `invoice: ${invoice.id}`,
+    `settlement item: ${invoice.id}`,
     `tx hash: ${proof.txHash}`,
     `rpc: ${arcRpcUrl}`,
     `status: ${proof.rpcStatus}`,
@@ -598,6 +685,14 @@ function ProofCard({ proof, invoice }: { proof: PaymentProof; invoice: Invoice }
     `token contract: ${proof.tokenAddress}`,
     `amount: ${proof.amount}`,
     `raw amount: ${proof.rawAmount}`,
+    `estimated gas: ${proof.estimatedGas ?? 'not captured'}`,
+    `estimated fee USDC: ${proof.estimatedFeeUsdc ?? 'not captured'}`,
+    `gas used: ${proof.gasUsed ?? 'not captured'}`,
+    `fee paid USDC: ${proof.feePaidUsdc ?? 'not captured'}`,
+    `native USDC before: ${proof.nativeBalanceBefore ?? 'not captured'}`,
+    `native USDC after: ${proof.nativeBalanceAfter ?? 'not captured'}`,
+    `${proof.token} before: ${proof.tokenBalanceBefore ?? 'not captured'}`,
+    `${proof.token} after: ${proof.tokenBalanceAfter ?? 'not captured'}`,
     `transfer log index: ${proof.transferLogIndex ?? 'not matched'}`,
     `memo status: ${proof.memoStatus}`,
     `reconciled at: ${proof.reconciledAt}`,
@@ -606,7 +701,7 @@ function ProofCard({ proof, invoice }: { proof: PaymentProof; invoice: Invoice }
   return (
     <div className="proof-card">
       <div className="proof-head">
-        <span>Onchain proof</span>
+        <span>PayOps proof</span>
         <strong>{proof.transferLogIndex === undefined ? 'Needs review' : 'Transfer matched'}</strong>
         <button type="button" onClick={() => void copyText(proofText)}>
           Copy proof
@@ -615,13 +710,19 @@ function ProofCard({ proof, invoice }: { proof: PaymentProof; invoice: Invoice }
       <ProofRow label="Transaction" value={proof.txHash} copy />
       <ProofRow label="RPC receipt" value={proof.rpcStatus} />
       <ProofRow label="Block" value={proof.blockNumber.toString()} />
-      <ProofRow label="Block hash" value={proof.blockHash} copy />
       <ProofRow label="From" value={proof.from} copy />
       <ProofRow label="To" value={proof.to} copy />
       <ProofRow label="Token" value={`${proof.amount} ${proof.token}`} />
       <ProofRow label="Token contract" value={proof.tokenAddress} copy />
+      <ProofRow label="Estimated fee" value={proof.estimatedFeeUsdc ? `${proof.estimatedFeeUsdc} USDC` : 'not captured'} />
+      <ProofRow label="Actual fee" value={proof.feePaidUsdc ? `${proof.feePaidUsdc} USDC` : 'not captured'} />
+      <ProofRow label="Gas used" value={proof.gasUsed ?? 'not captured'} />
+      <ProofRow label="Native before" value={proof.nativeBalanceBefore ? `${proof.nativeBalanceBefore} USDC` : 'not captured'} />
+      <ProofRow label="Native after" value={proof.nativeBalanceAfter ? `${proof.nativeBalanceAfter} USDC` : 'not captured'} />
+      <ProofRow label="Token before" value={proof.tokenBalanceBefore ? `${proof.tokenBalanceBefore} ${proof.token}` : 'not captured'} />
+      <ProofRow label="Token after" value={proof.tokenBalanceAfter ? `${proof.tokenBalanceAfter} ${proof.token}` : 'not captured'} />
       <ProofRow label="Transfer log" value={proof.transferLogIndex?.toString() ?? 'not matched'} />
-      <ProofRow label="Memo status" value="Memo contract pending validation in v1" />
+      <ProofRow label="Memo status" value="Memo contract pending validation" />
       <div className="proof-actions">
         <a href={explorerUrl} target="_blank" rel="noreferrer">
           Arcscan tx

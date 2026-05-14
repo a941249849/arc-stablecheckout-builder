@@ -51,18 +51,24 @@ Important precision rule:
 
 ## v1 Product Scope
 
-Build `Arc StableCheckout`, not another generic transfer UI.
+Build `Arc PayOps Console`, not another generic transfer UI or a direct Tempo checkout clone.
 
 Minimum flow:
 
-1. Create invoice with recipient, amount, token, and reference.
-2. Connect wallet to Arc Testnet.
-3. Confirm testnet USDC balance.
-4. Send USDC payment.
-5. Capture transaction hash.
-6. Verify RPC receipt.
-7. Link Arcscan transaction.
-8. Mark invoice paid only from verified receipt and transfer evidence.
+1. Read Arc native USDC gas balance.
+2. Read Arc gas price and latest block.
+3. Read USDC and EURC ERC-20 balances.
+4. Create settlement item with recipient, amount, token, and reference.
+5. Connect wallet to Arc Testnet.
+6. Confirm testnet USDC balance.
+7. Estimate gas and expected fee in USDC.
+8. Send USDC or EURC payment.
+9. Capture transaction hash.
+10. Verify RPC receipt.
+11. Capture actual gas used and fee paid in USDC.
+12. Capture before/after native and token balance deltas.
+13. Link Arcscan transaction.
+14. Mark item paid only from verified receipt and transfer evidence.
 
 Memo evaluation flow:
 

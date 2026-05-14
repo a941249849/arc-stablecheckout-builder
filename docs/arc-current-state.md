@@ -2,7 +2,19 @@
 
 Last updated: 2026-05-14
 
-This note records the current Arc build context after the Tempo StablePay demo. It separates official facts, live checks, builder interpretation, and the recommended next implementation scope.
+This note records the current Arc build context after the Tempo StablePay demo. It separates official facts, live checks, builder interpretation, and the recommended implementation scope.
+
+## Direction Update
+
+The Arc work should no longer be framed as a direct checkout clone. The stronger current angle is `Arc PayOps Console`: a USDC-native treasury operations and settlement proof surface.
+
+The revised focus is:
+
+```txt
+USDC gas accounting -> treasury balance state -> settlement -> receipt proof -> reconciliation record
+```
+
+This better matches Arc's differentiators: native USDC gas, predictable fee design, CCTP/Gateway liquidity consolidation, EURC and StableFX settlement paths, and Circle stack integration.
 
 ## Official Facts Checked
 
@@ -35,7 +47,7 @@ The RPC is reachable and consistent with the official Arc Testnet chain ID. The 
 
 ## Builder Interpretation
 
-Arc is currently more buildable than expected if the target is a basic USDC checkout or invoice flow. It has:
+Arc is currently more buildable than expected if the target is a PayOps console or basic USDC settlement flow. It has:
 
 - Public testnet RPC.
 - Public faucet.
@@ -50,10 +62,10 @@ The main difference from Tempo is product orientation:
 - Tempo's most direct primitive is `transferWithMemo`, which naturally fits invoice reconciliation.
 - Arc's most direct path is USDC transfer plus Circle/App Kit infrastructure, with memo/monitoring available as additional layers.
 
-This means the next Arc demo should not simply copy the Tempo UI. The stronger Arc angle is:
+This means the Arc demo should not simply copy the Tempo UI. The stronger Arc angle is:
 
 ```txt
-invoice -> USDC payment -> optional Memo contract call -> RPC receipt / Arcscan -> event or transaction proof -> paid
+settlement item -> USDC/EURC payment -> USDC gas accounting -> RPC receipt / Arcscan -> event proof -> reconciled
 ```
 
 If the Memo contract can wrap the USDC transfer cleanly and emit a usable memo event, Arc can be compared directly against Tempo's memo-based reconciliation. If not, the Arc v1 should be framed as USDC checkout plus proof, while memo reconciliation remains a follow-up.
@@ -72,14 +84,17 @@ Do not start with CCTP, Gateway, StableFX, Circle Contracts monitoring, or accou
 
 ## Recommended Next Demo
 
-Working name: `Arc StableCheckout`.
+Working name: `Arc PayOps Console`.
 
 Minimum target:
 
 - Connect wallet to Arc Testnet.
 - Show USDC and EURC balances.
-- Create invoice with recipient, amount, token, and reference.
+- Show native USDC gas balance and current gas price.
+- Create settlement item with recipient, amount, token, and reference.
 - Send USDC on Arc Testnet.
+- Estimate and capture gas paid in USDC.
+- Capture before/after balance deltas.
 - Verify receipt from RPC.
 - Link Arcscan transaction.
 - Record whether native USDC gas display works correctly in the connected wallet.

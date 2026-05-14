@@ -46,7 +46,7 @@ Arc still needs:
 
 ## Comparison Table
 
-| Dimension | Tempo StablePay | Arc StableCheckout |
+| Dimension | Tempo StablePay | Arc PayOps Console |
 | --- | --- | --- |
 | Primary asset model | Multiple test stablecoins; stablecoin fee tokens | USDC as native gas; USDC/EURC contracts |
 | Payment primitive | `transferWithMemo` | USDC transfer; possible Memo contract extension |
@@ -64,7 +64,7 @@ Arc still needs:
 1. Recap why Tempo was built first.
 2. Explain what Tempo proved and where it still failed.
 3. Enter Arc from current official status, not token expectation.
-4. Build or test Arc StableCheckout.
+4. Build or test Arc PayOps Console.
 5. Compare actual implementation friction.
 6. Explain where each stack is more natural:
    - Tempo: invoice memo and direct payment semantics.

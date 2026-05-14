@@ -2,7 +2,7 @@
   "name": "arc-stablecheckout-builder",
   "private": true,
   "version": "0.1.0",
-  "description": "Arc Testnet stablecoin checkout demo and research workspace.",
+  "description": "Arc Testnet PayOps console and research workspace.",
   "workspaces": [
     "apps/arc-stablecheckout"
   ],

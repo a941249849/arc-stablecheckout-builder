@@ -534,11 +534,17 @@ select:focus {
   padding: 18px;
 }
 
-.proof-card {
+.proof-card,
+.pending-card {
   border: 1px solid rgba(53, 105, 91, 0.28);
   background: #eef7f1;
   border-radius: 6px;
   padding: 18px;
+}
+
+.pending-card {
+  border-color: rgba(41, 72, 95, 0.24);
+  background: #edf3f7;
 }
 
 .proof-head {

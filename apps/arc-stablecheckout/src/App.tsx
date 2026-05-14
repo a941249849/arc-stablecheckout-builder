@@ -184,6 +184,8 @@ export function App() {
     setSelectedInvoiceId(invoice.id)
     setNotice({ tone: 'info', text: `Submitting ${invoice.amount} ${invoice.token} settlement for ${invoice.id}.` })
 
+    let submittedHash: Hex | undefined
+
     try {
       const [estimatedGas, estimatedGasPrice, nativeBefore, tokenBefore] = await Promise.all([
         publicClient.estimateContractGas({
@@ -206,6 +208,7 @@ export function App() {
         account: address,
         chain: arcTestnet,
       })
+      submittedHash = txHash
 
       setInvoices((current) =>
         current.map((item) => (item.id === invoice.id ? { ...item, txHash, status: 'pending' } : item)),
@@ -246,7 +249,15 @@ export function App() {
             : `Settlement proof confirmed for ${invoice.id}. Gas and balance deltas captured.`,
       })
     } catch (error) {
-      setNotice({ tone: 'error', text: `Send failed: ${stringifyError(error)}` })
+      if (submittedHash) {
+        setManualHash(submittedHash)
+        setNotice({
+          tone: 'info',
+          text: `Wallet returned tx ${shortAddress(submittedHash)}, but Arc RPC did not return a receipt before timeout. This is pending or not propagated, not a wallet signing failure. Use Verify tx to re-check.`,
+        })
+      } else {
+        setNotice({ tone: 'error', text: `Send failed before tx submission: ${stringifyError(error)}` })
+      }
     } finally {
       setIsSending(false)
     }
@@ -278,7 +289,10 @@ export function App() {
       )
       setNotice({ tone: 'success', text: 'Transaction hash verified through Arc RPC.' })
     } catch {
-      setNotice({ tone: 'error', text: 'Could not find that transaction through Arc RPC.' })
+      setNotice({
+        tone: 'error',
+        text: 'Arc public RPC does not currently return a receipt for that hash. It may be pending, dropped, or submitted through a wallet RPC that has not propagated it.',
+      })
     }
   }
 
@@ -525,6 +539,8 @@ export function App() {
           </div>
           {selectedInvoice?.proof ? (
             <ProofCard proof={selectedInvoice.proof} invoice={selectedInvoice} />
+          ) : selectedInvoice?.txHash ? (
+            <PendingTxCard invoice={selectedInvoice} onCopy={() => void copyText(selectedInvoice.txHash ?? '')} />
           ) : (
             <div className="empty-proof">
               Send a settlement item or verify a transaction hash. The console will show RPC status, gas paid,
@@ -552,7 +568,13 @@ export function App() {
                       </strong>
                       <small className={invoice.status}>{invoice.status}</small>
                     </span>
-                    <span>{invoice.proof?.feePaidUsdc ? `${invoice.proof.feePaidUsdc} gas USDC` : invoice.reference}</span>
+                    <span>
+                      {invoice.proof?.feePaidUsdc
+                        ? `${invoice.proof.feePaidUsdc} gas USDC`
+                        : invoice.txHash
+                          ? `tx ${shortAddress(invoice.txHash)}`
+                          : invoice.reference}
+                    </span>
                   </button>
                   <div className="invoice-actions">
                     <button type="button" onClick={() => removeInvoice(invoice.id)}>
@@ -669,6 +691,33 @@ function FlowNode({ title, detail, dark = false }: { title: string; detail: stri
 
 function FlowArrow() {
   return <div className="flow-arrow" aria-hidden="true" />
+}
+
+function PendingTxCard({ invoice, onCopy }: { invoice: Invoice; onCopy: () => void }) {
+  const explorerUrl = invoice.txHash ? `${arcExplorerUrl}/tx/${invoice.txHash}` : undefined
+
+  return (
+    <div className="pending-card">
+      <div className="proof-head">
+        <span>Submitted transaction</span>
+        <strong>Awaiting RPC receipt</strong>
+        <button type="button" onClick={onCopy}>
+          Copy tx
+        </button>
+      </div>
+      <ProofRow label="Settlement item" value={invoice.id} />
+      <ProofRow label="Transaction" value={invoice.txHash ?? 'not captured'} copy={Boolean(invoice.txHash)} />
+      <ProofRow label="Status" value="Wallet returned a transaction hash, but Arc RPC has not returned a receipt yet." />
+      <ProofRow label="Next check" value="Paste or keep this hash in Verify tx and re-check after propagation." />
+      {explorerUrl ? (
+        <div className="proof-actions">
+          <a href={explorerUrl} target="_blank" rel="noreferrer">
+            Arcscan tx
+          </a>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function ProofCard({ proof, invoice }: { proof: PaymentProof; invoice: Invoice }) {

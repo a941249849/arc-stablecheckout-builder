@@ -37,6 +37,7 @@ import {
   shortAddress,
   type Invoice,
   type PaymentProof,
+  type RpcDiagnosis,
 } from './invoices'
 import './styles.css'
 
@@ -250,10 +251,18 @@ export function App() {
       })
     } catch (error) {
       if (submittedHash) {
+        const diagnosis = await diagnoseMissingTransaction(submittedHash)
+        setInvoices((current) =>
+          current.map((item) =>
+            item.id === invoice.id
+              ? { ...item, txHash: submittedHash, status: 'needs-review', rpcDiagnosis: diagnosis }
+              : item,
+          ),
+        )
         setManualHash(submittedHash)
         setNotice({
-          tone: 'info',
-          text: `Wallet returned tx ${shortAddress(submittedHash)}, but Arc RPC did not return a receipt before timeout. This is pending or not propagated, not a wallet signing failure. Use Verify tx to re-check.`,
+          tone: diagnosis.walletRpc === 'receipt' ? 'error' : 'info',
+          text: diagnosis.message,
         })
       } else {
         setNotice({ tone: 'error', text: `Send failed before tx submission: ${stringifyError(error)}` })
@@ -283,16 +292,112 @@ export function App() {
                 txHash: hash,
                 status: proof.transferLogIndex === undefined ? 'needs-review' : 'paid',
                 proof,
+                rpcDiagnosis: undefined,
               }
             : item,
         ),
       )
       setNotice({ tone: 'success', text: 'Transaction hash verified through Arc RPC.' })
     } catch {
+      const diagnosis = await diagnoseMissingTransaction(hash)
+      setInvoices((current) =>
+        current.map((item) =>
+          item.id === selectedInvoice.id
+            ? {
+                ...item,
+                txHash: hash,
+                status: 'needs-review',
+                rpcDiagnosis: diagnosis,
+              }
+            : item,
+        ),
+      )
       setNotice({
-        tone: 'error',
-        text: 'Arc public RPC does not currently return a receipt for that hash. It may be pending, dropped, or submitted through a wallet RPC that has not propagated it.',
+        tone: diagnosis.walletRpc === 'not-found' || diagnosis.walletRpc === 'not-connected' ? 'error' : 'info',
+        text: diagnosis.message,
       })
+    }
+  }
+
+  async function diagnoseMissingTransaction(hash: Hex): Promise<RpcDiagnosis> {
+    const checkedAt = new Date().toISOString()
+
+    if (!walletClient) {
+      return {
+        hash,
+        publicRpc: 'not-found',
+        walletRpc: 'not-connected',
+        message:
+          'Arc public RPC does not return a receipt for this hash, and no connected wallet RPC is available for fallback verification.',
+        checkedAt,
+      }
+    }
+
+    try {
+      const request = walletClient.request as unknown as (args: {
+        method: string
+        params?: unknown[]
+      }) => Promise<unknown>
+      const walletChainId = (await request({ method: 'eth_chainId' })) as string
+      if (walletChainId.toLowerCase() !== `0x${arcChainId.toString(16)}`) {
+        return {
+          hash,
+          publicRpc: 'not-found',
+          walletRpc: 'wrong-chain',
+          walletChainId,
+          message:
+            'Arc public RPC does not return a receipt, and the connected wallet RPC is not on Arc Testnet. Switch wallet network and verify again.',
+          checkedAt,
+        }
+      }
+
+      const [walletReceipt, walletTx] = await Promise.all([
+        request({ method: 'eth_getTransactionReceipt', params: [hash] }),
+        request({ method: 'eth_getTransactionByHash', params: [hash] }),
+      ])
+
+      if (walletReceipt) {
+        return {
+          hash,
+          publicRpc: 'not-found',
+          walletRpc: 'receipt',
+          walletChainId,
+          message:
+            'Wallet RPC returns a receipt, but Arc public RPC does not. Treat this as an RPC propagation mismatch; public proof is not complete until Arc public RPC or Arcscan can verify it.',
+          checkedAt,
+        }
+      }
+
+      if (walletTx) {
+        return {
+          hash,
+          publicRpc: 'not-found',
+          walletRpc: 'pending',
+          walletChainId,
+          message:
+            'Wallet RPC sees the transaction, but no receipt is available yet and Arc public RPC cannot find it. Treat this as pending propagation and re-check with Verify tx.',
+          checkedAt,
+        }
+      }
+
+      return {
+        hash,
+        publicRpc: 'not-found',
+        walletRpc: 'not-found',
+        walletChainId,
+        message:
+          'Neither Arc public RPC nor the connected wallet RPC can find this hash. The transaction was likely dropped, not broadcast, or returned by a wallet RPC before network propagation.',
+        checkedAt,
+      }
+    } catch {
+      return {
+        hash,
+        publicRpc: 'not-found',
+        walletRpc: 'error',
+        message:
+          'Arc public RPC does not return a receipt, and the connected wallet RPC fallback check failed. Reconnect the wallet, confirm Arc Testnet, then verify again.',
+        checkedAt,
+      }
     }
   }
 
@@ -540,7 +645,11 @@ export function App() {
           {selectedInvoice?.proof ? (
             <ProofCard proof={selectedInvoice.proof} invoice={selectedInvoice} />
           ) : selectedInvoice?.txHash ? (
-            <PendingTxCard invoice={selectedInvoice} onCopy={() => void copyText(selectedInvoice.txHash ?? '')} />
+            <PendingTxCard
+              invoice={selectedInvoice}
+              diagnosis={selectedInvoice.rpcDiagnosis}
+              onCopy={() => void copyText(selectedInvoice.txHash ?? '')}
+            />
           ) : (
             <div className="empty-proof">
               Send a settlement item or verify a transaction hash. The console will show RPC status, gas paid,
@@ -693,7 +802,15 @@ function FlowArrow() {
   return <div className="flow-arrow" aria-hidden="true" />
 }
 
-function PendingTxCard({ invoice, onCopy }: { invoice: Invoice; onCopy: () => void }) {
+function PendingTxCard({
+  invoice,
+  diagnosis,
+  onCopy,
+}: {
+  invoice: Invoice
+  diagnosis?: RpcDiagnosis
+  onCopy: () => void
+}) {
   const explorerUrl = invoice.txHash ? `${arcExplorerUrl}/tx/${invoice.txHash}` : undefined
 
   return (
@@ -707,8 +824,20 @@ function PendingTxCard({ invoice, onCopy }: { invoice: Invoice; onCopy: () => vo
       </div>
       <ProofRow label="Settlement item" value={invoice.id} />
       <ProofRow label="Transaction" value={invoice.txHash ?? 'not captured'} copy={Boolean(invoice.txHash)} />
-      <ProofRow label="Status" value="Wallet returned a transaction hash, but Arc RPC has not returned a receipt yet." />
-      <ProofRow label="Next check" value="Paste or keep this hash in Verify tx and re-check after propagation." />
+      <ProofRow
+        label="Public RPC"
+        value={diagnosis?.publicRpc === 'receipt' ? 'receipt found' : 'receipt not found'}
+      />
+      <ProofRow label="Wallet RPC" value={diagnosis?.walletRpc ?? 'not checked'} />
+      {diagnosis?.walletChainId ? <ProofRow label="Wallet chain" value={diagnosis.walletChainId} /> : null}
+      <ProofRow
+        label="Status"
+        value={
+          diagnosis?.message ??
+          'Wallet returned a transaction hash, but Arc public RPC has not returned a receipt yet.'
+        }
+      />
+      <ProofRow label="Next check" value="Keep this hash in Verify tx and re-check after propagation." />
       {explorerUrl ? (
         <div className="proof-actions">
           <a href={explorerUrl} target="_blank" rel="noreferrer">

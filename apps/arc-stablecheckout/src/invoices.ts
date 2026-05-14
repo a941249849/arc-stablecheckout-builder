@@ -3,6 +3,15 @@ import type { StableTokenSymbol } from './arc'
 
 export type InvoiceStatus = 'draft' | 'pending' | 'paid' | 'needs-review'
 
+export type RpcDiagnosis = {
+  hash: Hex
+  publicRpc: 'not-found' | 'receipt'
+  walletRpc: 'not-connected' | 'not-found' | 'pending' | 'receipt' | 'wrong-chain' | 'error'
+  walletChainId?: string
+  message: string
+  checkedAt: string
+}
+
 export type PaymentProof = {
   txHash: Hex
   rpcStatus: string
@@ -39,6 +48,7 @@ export type Invoice = {
   createdAt: string
   txHash?: Hex
   proof?: PaymentProof
+  rpcDiagnosis?: RpcDiagnosis
 }
 
 const storageKey = 'arc-payops-invoices-v2'

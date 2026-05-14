@@ -365,6 +365,7 @@ export function App() {
   function removeInvoice(id: string) {
     setInvoices((current) => current.filter((invoice) => invoice.id !== id))
     if (selectedInvoiceId === id) setSelectedInvoiceId(undefined)
+    setNotice({ tone: 'info', text: 'Settlement item removed.' })
   }
 
   const proofCount = invoices.filter((invoice) => invoice.proof).length

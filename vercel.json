@@ -1,5 +1,0 @@
-{
-  "installCommand": "npm install",
-  "buildCommand": "npm --workspace apps/arc-stablecheckout run build",
-  "outputDirectory": "apps/arc-stablecheckout/dist"
-}

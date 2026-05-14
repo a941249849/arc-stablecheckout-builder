@@ -1,0 +1,13 @@
+{
+  "name": "arc-stablecheckout-builder",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Arc Testnet stablecoin checkout demo and research workspace.",
+  "workspaces": [
+    "apps/arc-stablecheckout"
+  ],
+  "scripts": {
+    "build": "npm --workspace apps/arc-stablecheckout run build",
+    "dev": "npm --workspace apps/arc-stablecheckout run dev"
+  }
+}

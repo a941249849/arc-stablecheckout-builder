@@ -5,7 +5,7 @@ export type InvoiceStatus = 'draft' | 'pending' | 'paid' | 'needs-review'
 
 export type RpcDiagnosis = {
   hash: Hex
-  publicRpc: 'not-found' | 'receipt'
+  publicRpc: 'not-found' | 'pending' | 'receipt'
   walletRpc: 'not-connected' | 'not-found' | 'pending' | 'receipt' | 'wrong-chain' | 'error'
   walletChainId?: string
   message: string

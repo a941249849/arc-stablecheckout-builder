@@ -94,7 +94,22 @@ export const transferEventAbi = erc20Abi[3]
 
 export const wagmiConfig = createConfig({
   chains: [arcTestnet],
-  connectors: [injected()],
+  connectors: [
+    injected({
+      target: {
+        id: 'okxWallet',
+        name: 'OKX Wallet',
+        provider(window) {
+          return (
+            window?.ethereum?.providers?.find((provider) => provider.isOkxWallet || provider.isOKExWallet) ??
+            (window?.ethereum?.isOkxWallet || window?.ethereum?.isOKExWallet ? window.ethereum : undefined)
+          )
+        },
+      },
+    }),
+    injected({ target: 'metaMask' }),
+    injected(),
+  ],
   transports: {
     [arcTestnet.id]: http(arcRpcUrl),
   },

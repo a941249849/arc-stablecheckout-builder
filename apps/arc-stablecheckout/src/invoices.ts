@@ -10,6 +10,8 @@ export type RpcDiagnosis = {
   walletChainId?: string
   nonce?: number
   rawNonce?: string
+  publicNonce?: number
+  rawPublicNonce?: string
   message: string
   checkedAt: string
 }

@@ -127,8 +127,8 @@ export function App() {
     void refreshPayOpsState()
   }, [address, publicClient])
 
-  async function connectWallet() {
-    const connectorToUse = connectors[0]
+  async function connectWallet(connectorId?: string) {
+    const connectorToUse = connectorId ? connectors.find((item) => item.id === connectorId) : connectors[0]
     if (!connectorToUse) {
       setNotice({ tone: 'error', text: 'No injected browser wallet detected.' })
       return
@@ -200,7 +200,7 @@ export function App() {
     let submittedHash: Hex | undefined
 
     try {
-      const [estimatedGas, estimatedGasPrice, nativeBefore, tokenBefore] = await Promise.all([
+      const [estimatedGas, estimatedGasPrice, nativeBefore, tokenBefore, publicNonce] = await Promise.all([
         settleOptional(
           withTimeout(
             publicClient.estimateContractGas({
@@ -216,11 +216,13 @@ export function App() {
         settleOptional(withTimeout(publicClient.getGasPrice(), preflightTimeoutMs)),
         settleOptional(withTimeout(publicClient.getBalance({ address }), preflightTimeoutMs)),
         settleOptional(withTimeout(readTokenBalance(address, token.symbol), preflightTimeoutMs)),
+        settleOptional(withTimeout(publicClient.getTransactionCount({ address, blockTag: 'latest' }), preflightTimeoutMs)),
       ])
+      const nonce = options.replacementNonce ?? publicNonce
 
       setNotice({
         tone: 'info',
-        text: `Wallet step: confirm ${invoice.amount} ${invoice.token} settlement for ${invoice.id}. Arc fee params are set to avoid underpriced pending txs.`,
+        text: `Wallet step: confirm ${invoice.amount} ${invoice.token} settlement for ${invoice.id}. Public Arc nonce ${nonce ?? 'wallet-selected'} will be used.`,
       })
       const feeParams = buildArcFeeParams(estimatedGasPrice, estimatedGas, options.replacementNonce !== undefined)
 
@@ -233,7 +235,7 @@ export function App() {
         chain: arcTestnet,
         maxFeePerGas: feeParams.maxFeePerGas,
         maxPriorityFeePerGas: feeParams.maxPriorityFeePerGas,
-        ...(options.replacementNonce !== undefined ? { nonce: options.replacementNonce } : {}),
+        ...(nonce !== undefined ? { nonce } : {}),
         ...(feeParams.gas ? { gas: feeParams.gas } : {}),
       })
       submittedHash = txHash
@@ -440,6 +442,7 @@ export function App() {
 
       if (walletTx) {
         const nonceInfo = getTxNonce(walletTx)
+        const publicNonceInfo = await getPublicNonceInfo()
         return {
           hash,
           publicRpc,
@@ -447,10 +450,12 @@ export function App() {
           walletChainId,
           nonce: nonceInfo.nonce,
           rawNonce: nonceInfo.rawNonce,
+          publicNonce: publicNonceInfo.publicNonce,
+          rawPublicNonce: publicNonceInfo.rawPublicNonce,
           message:
             publicRpc === 'pending'
               ? 'Arc public RPC and wallet RPC can both see this transaction, but no receipt is available yet. Re-check with Verify tx shortly.'
-              : 'Wallet RPC sees the transaction, but Arc public RPC cannot find it. Use Replace pending to resubmit the same settlement with the same nonce and higher Arc fee parameters.',
+              : 'Wallet RPC sees this hash, but Arc public RPC cannot find it. This is not an Arc-settled payment yet. Retry with the public Arc nonce so the wallet does not keep using a wallet-only pending nonce.',
           checkedAt,
         }
       }
@@ -475,6 +480,16 @@ export function App() {
           'Arc public RPC does not return a receipt, and the connected wallet RPC fallback check failed. Reconnect the wallet, confirm Arc Testnet, then verify again.',
         checkedAt,
       }
+    }
+  }
+
+  async function getPublicNonceInfo(): Promise<{ publicNonce?: number; rawPublicNonce?: string }> {
+    if (!publicClient || !address) return {}
+    try {
+      const publicNonce = await publicClient.getTransactionCount({ address, blockTag: 'latest' })
+      return { publicNonce, rawPublicNonce: `0x${publicNonce.toString(16)}` }
+    } catch {
+      return {}
     }
   }
 
@@ -632,9 +647,16 @@ export function App() {
               </button>
             </>
           ) : (
-            <button type="button" onClick={connectWallet} disabled={isConnecting}>
-              {isConnecting ? 'Connecting...' : 'Connect wallet'}
-            </button>
+            connectors.slice(0, 3).map((walletConnector) => (
+              <button
+                type="button"
+                key={walletConnector.id}
+                onClick={() => connectWallet(walletConnector.id)}
+                disabled={isConnecting}
+              >
+                {isConnecting ? 'Connecting...' : walletConnector.name}
+              </button>
+            ))
           )}
           <button type="button" onClick={switchToArc} disabled={!isConnected || isSwitching || isArcNetwork}>
             {isArcNetwork ? 'Arc Testnet' : 'Switch network'}
@@ -730,9 +752,11 @@ export function App() {
               diagnosis={selectedInvoice.rpcDiagnosis}
               onCopy={() => void copyText(selectedInvoice.txHash ?? '')}
               onReplace={
-                selectedInvoice.rpcDiagnosis?.walletRpc === 'pending' &&
-                selectedInvoice.rpcDiagnosis.nonce !== undefined
-                  ? () => void sendInvoice(selectedInvoice, { replacementNonce: selectedInvoice.rpcDiagnosis?.nonce })
+                selectedInvoice.rpcDiagnosis?.publicRpc === 'not-found'
+                  ? () => void sendInvoice(selectedInvoice)
+                  : selectedInvoice.rpcDiagnosis?.walletRpc === 'pending' &&
+                      selectedInvoice.rpcDiagnosis.nonce !== undefined
+                    ? () => void sendInvoice(selectedInvoice, { replacementNonce: selectedInvoice.rpcDiagnosis?.nonce })
                   : undefined
               }
             />
@@ -915,7 +939,8 @@ function PendingTxCard({
       <ProofRow label="Public RPC" value={diagnosis?.publicRpc ?? 'not checked'} />
       <ProofRow label="Wallet RPC" value={diagnosis?.walletRpc ?? 'not checked'} />
       {diagnosis?.walletChainId ? <ProofRow label="Wallet chain" value={diagnosis.walletChainId} /> : null}
-      {diagnosis?.rawNonce ? <ProofRow label="Nonce" value={diagnosis.rawNonce} /> : null}
+      {diagnosis?.rawNonce ? <ProofRow label="Wallet nonce" value={diagnosis.rawNonce} /> : null}
+      {diagnosis?.rawPublicNonce ? <ProofRow label="Arc public nonce" value={diagnosis.rawPublicNonce} /> : null}
       <ProofRow
         label="Status"
         value={
@@ -923,7 +948,14 @@ function PendingTxCard({
           'Wallet returned a transaction hash, but Arc public RPC has not returned a receipt yet.'
         }
       />
-      <ProofRow label="Next check" value="Keep this hash in Verify tx and re-check after propagation." />
+      <ProofRow
+        label="Next check"
+        value={
+          diagnosis?.publicRpc === 'not-found'
+            ? 'This hash is not a completed Arc payment. Retry submits the same item with the public Arc nonce.'
+            : 'Keep this hash in Verify tx and re-check after propagation.'
+        }
+      />
       {explorerUrl ? (
         <div className="proof-actions">
           <a href={explorerUrl} target="_blank" rel="noreferrer">
@@ -931,7 +963,7 @@ function PendingTxCard({
           </a>
           {onReplace ? (
             <button type="button" onClick={onReplace}>
-              Replace pending
+              {diagnosis?.publicRpc === 'not-found' ? 'Retry with public nonce' : 'Replace pending'}
             </button>
           ) : null}
         </div>

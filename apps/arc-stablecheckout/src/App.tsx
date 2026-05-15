@@ -46,6 +46,7 @@ type Notice = { tone: 'info' | 'success' | 'error'; text: string }
 
 const emptyBalances = Object.fromEntries(stableTokens.map((token) => [token.symbol, '-']))
 const unavailable = '-'
+const preflightTimeoutMs = 8_000
 
 export function App() {
   const { address, chainId, connector, isConnected } = useAccount()
@@ -183,23 +184,33 @@ export function App() {
     const rawAmount = parseUnits(invoice.amount, token.decimals)
     setIsSending(true)
     setSelectedInvoiceId(invoice.id)
-    setNotice({ tone: 'info', text: `Submitting ${invoice.amount} ${invoice.token} settlement for ${invoice.id}.` })
+    setNotice({ tone: 'info', text: `Preflight: checking gas, balances, and settlement parameters for ${invoice.id}.` })
 
     let submittedHash: Hex | undefined
 
     try {
       const [estimatedGas, estimatedGasPrice, nativeBefore, tokenBefore] = await Promise.all([
-        publicClient.estimateContractGas({
-          account: address,
-          address: token.address,
-          abi: erc20Abi,
-          functionName: 'transfer',
-          args: [invoice.recipient, rawAmount],
-        }),
-        publicClient.getGasPrice(),
-        publicClient.getBalance({ address }),
-        readTokenBalance(address, token.symbol),
+        settleOptional(
+          withTimeout(
+            publicClient.estimateContractGas({
+              account: address,
+              address: token.address,
+              abi: erc20Abi,
+              functionName: 'transfer',
+              args: [invoice.recipient, rawAmount],
+            }),
+            preflightTimeoutMs,
+          ),
+        ),
+        settleOptional(withTimeout(publicClient.getGasPrice(), preflightTimeoutMs)),
+        settleOptional(withTimeout(publicClient.getBalance({ address }), preflightTimeoutMs)),
+        settleOptional(withTimeout(readTokenBalance(address, token.symbol), preflightTimeoutMs)),
       ])
+
+      setNotice({
+        tone: 'info',
+        text: `Wallet step: confirm ${invoice.amount} ${invoice.token} settlement for ${invoice.id}.`,
+      })
 
       const txHash = await walletClient.writeContract({
         address: token.address,
@@ -214,11 +225,15 @@ export function App() {
       setInvoices((current) =>
         current.map((item) => (item.id === invoice.id ? { ...item, txHash, status: 'pending' } : item)),
       )
+      setNotice({
+        tone: 'info',
+        text: `Broadcast step: wallet returned tx ${shortAddress(txHash)}. Waiting for Arc RPC receipt.`,
+      })
 
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 90_000 })
       const [nativeAfter, tokenAfter] = await Promise.all([
-        publicClient.getBalance({ address }),
-        readTokenBalance(address, token.symbol),
+        settleOptional(withTimeout(publicClient.getBalance({ address }), preflightTimeoutMs)),
+        settleOptional(withTimeout(readTokenBalance(address, token.symbol), preflightTimeoutMs)),
       ])
       const proof = createProofFromReceipt(receipt, invoice, address, rawAmount.toString(), {
         estimatedGas,
@@ -418,12 +433,12 @@ export function App() {
     payer: Address,
     rawAmount: string,
     telemetry?: {
-      estimatedGas: bigint
-      estimatedGasPrice: bigint
-      nativeBefore: bigint
-      nativeAfter: bigint
-      tokenBefore: bigint
-      tokenAfter: bigint
+      estimatedGas?: bigint
+      estimatedGasPrice?: bigint
+      nativeBefore?: bigint
+      nativeAfter?: bigint
+      tokenBefore?: bigint
+      tokenAfter?: bigint
     },
   ): PaymentProof {
     const token = findToken(invoice.token)
@@ -452,7 +467,10 @@ export function App() {
     }
 
     const feePaid = receipt.effectiveGasPrice ? receipt.gasUsed * receipt.effectiveGasPrice : undefined
-    const estimatedFee = telemetry ? telemetry.estimatedGas * telemetry.estimatedGasPrice : undefined
+    const estimatedFee =
+      telemetry?.estimatedGas && telemetry.estimatedGasPrice
+        ? telemetry.estimatedGas * telemetry.estimatedGasPrice
+        : undefined
 
     return {
       txHash: receipt.transactionHash,
@@ -466,15 +484,15 @@ export function App() {
       tokenAddress: token.address,
       amount: invoice.amount,
       rawAmount,
-      estimatedGas: telemetry?.estimatedGas.toString(),
+      estimatedGas: telemetry?.estimatedGas?.toString(),
       estimatedFeeUsdc: estimatedFee ? formatUnits(estimatedFee, 18) : undefined,
       gasUsed: receipt.gasUsed.toString(),
       effectiveGasPrice: receipt.effectiveGasPrice ? formatUnits(receipt.effectiveGasPrice, 18) : undefined,
       feePaidUsdc: feePaid ? formatUnits(feePaid, 18) : undefined,
-      nativeBalanceBefore: telemetry ? formatUnits(telemetry.nativeBefore, 18) : undefined,
-      nativeBalanceAfter: telemetry ? formatUnits(telemetry.nativeAfter, 18) : undefined,
-      tokenBalanceBefore: telemetry ? formatUnits(telemetry.tokenBefore, token.decimals) : undefined,
-      tokenBalanceAfter: telemetry ? formatUnits(telemetry.tokenAfter, token.decimals) : undefined,
+      nativeBalanceBefore: telemetry?.nativeBefore ? formatUnits(telemetry.nativeBefore, 18) : undefined,
+      nativeBalanceAfter: telemetry?.nativeAfter ? formatUnits(telemetry.nativeAfter, 18) : undefined,
+      tokenBalanceBefore: telemetry?.tokenBefore ? formatUnits(telemetry.tokenBefore, token.decimals) : undefined,
+      tokenBalanceAfter: telemetry?.tokenAfter ? formatUnits(telemetry.tokenAfter, token.decimals) : undefined,
       transferLogIndex,
       memoStatus: 'pending-evaluation',
       reconciledAt: new Date().toISOString(),
@@ -928,4 +946,27 @@ function ProofRow({ label, value, copy = false }: { label: string; value: string
 function stringifyError(error: unknown): string {
   if (error instanceof Error) return error.message.split('\n')[0] ?? error.message
   return 'unknown error'
+}
+
+async function settleOptional<T>(promise: Promise<T>): Promise<T | undefined> {
+  try {
+    return await promise
+  } catch {
+    return undefined
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error('timeout')), timeoutMs)
+    promise
+      .then((value) => {
+        window.clearTimeout(timeout)
+        resolve(value)
+      })
+      .catch((error: unknown) => {
+        window.clearTimeout(timeout)
+        reject(error)
+      })
+  })
 }

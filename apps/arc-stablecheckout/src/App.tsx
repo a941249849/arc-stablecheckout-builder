@@ -50,6 +50,8 @@ const unavailable = '-'
 const preflightTimeoutMs = 8_000
 const minArcMaxFeePerGas = parseGwei('30')
 const arcPriorityFeePerGas = parseGwei('2')
+const replacementMaxFeePerGas = parseGwei('50')
+const replacementPriorityFeePerGas = parseGwei('5')
 
 export function App() {
   const { address, chainId, connector, isConnected } = useAccount()
@@ -173,7 +175,7 @@ export function App() {
     setNotice({ tone: 'success', text: `Settlement item ${invoice.id} created.` })
   }
 
-  async function sendInvoice(invoice: Invoice) {
+  async function sendInvoice(invoice: Invoice, options: { replacementNonce?: number } = {}) {
     if (!publicClient || !walletClient || !address) {
       setNotice({ tone: 'error', text: 'Connect a wallet on Arc Testnet before sending.' })
       return
@@ -187,7 +189,13 @@ export function App() {
     const rawAmount = parseUnits(invoice.amount, token.decimals)
     setIsSending(true)
     setSelectedInvoiceId(invoice.id)
-    setNotice({ tone: 'info', text: `Preflight: checking gas, balances, and settlement parameters for ${invoice.id}.` })
+    setNotice({
+      tone: 'info',
+      text:
+        options.replacementNonce === undefined
+          ? `Preflight: checking gas, balances, and settlement parameters for ${invoice.id}.`
+          : `Replacement preflight: using nonce ${options.replacementNonce} with higher Arc fee parameters.`,
+    })
 
     let submittedHash: Hex | undefined
 
@@ -214,7 +222,7 @@ export function App() {
         tone: 'info',
         text: `Wallet step: confirm ${invoice.amount} ${invoice.token} settlement for ${invoice.id}. Arc fee params are set to avoid underpriced pending txs.`,
       })
-      const feeParams = buildArcFeeParams(estimatedGasPrice, estimatedGas)
+      const feeParams = buildArcFeeParams(estimatedGasPrice, estimatedGas, options.replacementNonce !== undefined)
 
       const txHash = await walletClient.writeContract({
         address: token.address,
@@ -225,6 +233,7 @@ export function App() {
         chain: arcTestnet,
         maxFeePerGas: feeParams.maxFeePerGas,
         maxPriorityFeePerGas: feeParams.maxPriorityFeePerGas,
+        ...(options.replacementNonce !== undefined ? { nonce: options.replacementNonce } : {}),
         ...(feeParams.gas ? { gas: feeParams.gas } : {}),
       })
       submittedHash = txHash
@@ -430,15 +439,18 @@ export function App() {
       }
 
       if (walletTx) {
+        const nonceInfo = getTxNonce(walletTx)
         return {
           hash,
           publicRpc,
           walletRpc: 'pending',
           walletChainId,
+          nonce: nonceInfo.nonce,
+          rawNonce: nonceInfo.rawNonce,
           message:
             publicRpc === 'pending'
               ? 'Arc public RPC and wallet RPC can both see this transaction, but no receipt is available yet. Re-check with Verify tx shortly.'
-              : 'Wallet RPC sees the transaction, but Arc public RPC cannot find it. This is an RPC propagation mismatch; re-check with Verify tx, but do not submit duplicate payments until status is clear.',
+              : 'Wallet RPC sees the transaction, but Arc public RPC cannot find it. Use Replace pending to resubmit the same settlement with the same nonce and higher Arc fee parameters.',
           checkedAt,
         }
       }
@@ -717,6 +729,12 @@ export function App() {
               invoice={selectedInvoice}
               diagnosis={selectedInvoice.rpcDiagnosis}
               onCopy={() => void copyText(selectedInvoice.txHash ?? '')}
+              onReplace={
+                selectedInvoice.rpcDiagnosis?.walletRpc === 'pending' &&
+                selectedInvoice.rpcDiagnosis.nonce !== undefined
+                  ? () => void sendInvoice(selectedInvoice, { replacementNonce: selectedInvoice.rpcDiagnosis?.nonce })
+                  : undefined
+              }
             />
           ) : (
             <div className="empty-proof">
@@ -874,10 +892,12 @@ function PendingTxCard({
   invoice,
   diagnosis,
   onCopy,
+  onReplace,
 }: {
   invoice: Invoice
   diagnosis?: RpcDiagnosis
   onCopy: () => void
+  onReplace?: () => void
 }) {
   const explorerUrl = invoice.txHash ? `${arcExplorerUrl}/tx/${invoice.txHash}` : undefined
 
@@ -895,6 +915,7 @@ function PendingTxCard({
       <ProofRow label="Public RPC" value={diagnosis?.publicRpc ?? 'not checked'} />
       <ProofRow label="Wallet RPC" value={diagnosis?.walletRpc ?? 'not checked'} />
       {diagnosis?.walletChainId ? <ProofRow label="Wallet chain" value={diagnosis.walletChainId} /> : null}
+      {diagnosis?.rawNonce ? <ProofRow label="Nonce" value={diagnosis.rawNonce} /> : null}
       <ProofRow
         label="Status"
         value={
@@ -908,6 +929,11 @@ function PendingTxCard({
           <a href={explorerUrl} target="_blank" rel="noreferrer">
             Arcscan tx
           </a>
+          {onReplace ? (
+            <button type="button" onClick={onReplace}>
+              Replace pending
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -995,14 +1021,16 @@ function stringifyError(error: unknown): string {
   return 'unknown error'
 }
 
-function buildArcFeeParams(gasPrice?: bigint, estimatedGas?: bigint) {
-  const maxFeePerGas = gasPrice && gasPrice > minArcMaxFeePerGas ? gasPrice + arcPriorityFeePerGas : minArcMaxFeePerGas
+function buildArcFeeParams(gasPrice?: bigint, estimatedGas?: bigint, replacement = false) {
+  const baseMaxFee =
+    gasPrice && gasPrice > minArcMaxFeePerGas ? gasPrice + arcPriorityFeePerGas : minArcMaxFeePerGas
+  const maxFeePerGas = replacement && replacementMaxFeePerGas > baseMaxFee ? replacementMaxFeePerGas : baseMaxFee
   const gas = estimatedGas ? (estimatedGas * 120n) / 100n : undefined
 
   return {
     gas,
     maxFeePerGas,
-    maxPriorityFeePerGas: arcPriorityFeePerGas,
+    maxPriorityFeePerGas: replacement ? replacementPriorityFeePerGas : arcPriorityFeePerGas,
   }
 }
 
@@ -1031,4 +1059,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function getTxNonce(value: unknown): { nonce?: number; rawNonce?: string } {
+  if (!value || typeof value !== 'object' || !('nonce' in value)) return {}
+  const rawNonce = (value as { nonce?: unknown }).nonce
+  if (typeof rawNonce !== 'string') return {}
+  const nonce = Number.parseInt(rawNonce, 16)
+  if (Number.isNaN(nonce)) return { rawNonce }
+  return { nonce, rawNonce }
 }

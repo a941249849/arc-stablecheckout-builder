@@ -8,6 +8,8 @@ export type RpcDiagnosis = {
   publicRpc: 'not-found' | 'pending' | 'receipt'
   walletRpc: 'not-connected' | 'not-found' | 'pending' | 'receipt' | 'wrong-chain' | 'error'
   walletChainId?: string
+  nonce?: number
+  rawNonce?: string
   message: string
   checkedAt: string
 }

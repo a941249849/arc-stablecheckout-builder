@@ -3,6 +3,7 @@ import {
   decodeEventLog,
   formatUnits,
   isAddress,
+  parseGwei,
   parseUnits,
   type Address,
   type Hex,
@@ -47,6 +48,8 @@ type Notice = { tone: 'info' | 'success' | 'error'; text: string }
 const emptyBalances = Object.fromEntries(stableTokens.map((token) => [token.symbol, '-']))
 const unavailable = '-'
 const preflightTimeoutMs = 8_000
+const minArcMaxFeePerGas = parseGwei('21')
+const arcPriorityFeePerGas = parseGwei('1')
 
 export function App() {
   const { address, chainId, connector, isConnected } = useAccount()
@@ -209,8 +212,9 @@ export function App() {
 
       setNotice({
         tone: 'info',
-        text: `Wallet step: confirm ${invoice.amount} ${invoice.token} settlement for ${invoice.id}.`,
+        text: `Wallet step: confirm ${invoice.amount} ${invoice.token} settlement for ${invoice.id}. Arc fee params are set to avoid underpriced pending txs.`,
       })
+      const feeParams = buildArcFeeParams(estimatedGasPrice, estimatedGas)
 
       const txHash = await walletClient.writeContract({
         address: token.address,
@@ -219,6 +223,9 @@ export function App() {
         args: [invoice.recipient, rawAmount],
         account: address,
         chain: arcTestnet,
+        maxFeePerGas: feeParams.maxFeePerGas,
+        maxPriorityFeePerGas: feeParams.maxPriorityFeePerGas,
+        ...(feeParams.gas ? { gas: feeParams.gas } : {}),
       })
       submittedHash = txHash
 
@@ -946,6 +953,17 @@ function ProofRow({ label, value, copy = false }: { label: string; value: string
 function stringifyError(error: unknown): string {
   if (error instanceof Error) return error.message.split('\n')[0] ?? error.message
   return 'unknown error'
+}
+
+function buildArcFeeParams(gasPrice?: bigint, estimatedGas?: bigint) {
+  const maxFeePerGas = gasPrice && gasPrice > minArcMaxFeePerGas ? gasPrice + arcPriorityFeePerGas : minArcMaxFeePerGas
+  const gas = estimatedGas ? (estimatedGas * 120n) / 100n : undefined
+
+  return {
+    gas,
+    maxFeePerGas,
+    maxPriorityFeePerGas: arcPriorityFeePerGas,
+  }
 }
 
 async function settleOptional<T>(promise: Promise<T>): Promise<T | undefined> {
